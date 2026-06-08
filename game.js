@@ -1,237 +1,350 @@
 // game.js
-(function () {
-  /* ========== Canvas 初始化 ========== */
-  const canvas = document.getElementById("gameCanvas");
-  const ctx = canvas.getContext("2d");
-  const scoreEl = document.getElementById("score");
-  const btnStart = document.getElementById("btnStart");
-  const btnRestart = document.getElementById("btnRestart");
+(() => {
+  /* ── 核心数据结构 ── */
+  const COLS = 20;
+  const ROWS = 20;
+  const CELL = 24;
+  const GAP = 1;
+  const TICK_INTERVAL = 130; // ms
 
-  /* ========== 常量 ========== */
-  const GRID = 20;          // 每格像素
-  const COLS = 30;          // 列数
-  const ROWS = 20;          // 行数
-  const W = COLS * GRID;
-  const H = ROWS * GRID;
-  canvas.width = W;
-  canvas.height = H;
+  const Dir = Object.freeze({
+    UP:    { x:  0, y: -1 },
+    DOWN:  { x:  0, y:  1 },
+    LEFT:  { x: -1, y:  0 },
+    RIGHT: { x:  1, y:  0 },
+  });
 
-  /* ========== 游戏状态 ========== */
-  let snake = [];           // [{x,y}, ...]  头在前
-  let food = null;          // {x, y}
-  let dir = "";             // 当前方向 "UP"|"DOWN"|"LEFT"|"RIGHT"
-  let nextDir = "";         // 缓冲方向（一帧内只接受一次变向）
+  const OPPOSITE = {
+    [key(Dir.UP)]:    key(Dir.DOWN),
+    [key(Dir.DOWN)]:  key(Dir.UP),
+    [key(Dir.LEFT)]:  key(Dir.RIGHT),
+    [key(Dir.RIGHT)]: key(Dir.LEFT),
+  };
+
+  function key(d) { return `${d.x},${d.y}`; }
+
+  /* ── DOM 引用 ── */
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = COLS * CELL;
+  canvas.height = ROWS * CELL;
+
+  const scoreEl = document.getElementById('score');
+  const highScoreEl = document.getElementById('highScore');
+  const overlay = document.getElementById('overlay');
+  const overlayText = document.getElementById('overlayText');
+  const overlayBtn = document.getElementById('overlayBtn');
+
+  /* ── 状态 ── */
+  let snake = [];
+  let food = null;
+  let direction = Dir.RIGHT;
+  let nextDirection = Dir.RIGHT;
   let score = 0;
-  let gameLoopId = null;
+  let highScore = 0;
+  let ticker = null;
   let running = false;
   let gameOver = false;
-  const BASE_INTERVAL = 100; // ms
+  let paused = false;
 
-  /* ========== 绘制 ========== */
-  function clear() {
-    ctx.fillStyle = "#0f3460";
-    ctx.fillRect(0, 0, W, H);
-  }
+  /* ── 持久化最高分 ── */
+  try {
+    const saved = localStorage.getItem('snake_high_score');
+    if (saved !== null) highScore = parseInt(saved, 10) || 0;
+  } catch (_) { /* 无 localStorage */ }
+  highScoreEl.textContent = highScore;
 
-  function drawRect(x, y, color) {
-    ctx.fillStyle = color;
-    ctx.fillRect(x * GRID + 1, y * GRID + 1, GRID - 2, GRID - 2);
-  }
-
-  function drawSnake() {
-    snake.forEach(function (seg, i) {
-      drawRect(seg.x, seg.y, i === 0 ? "#4ecca3" : "#e94560");
-    });
-  }
-
-  function drawFood() {
-    if (food) drawRect(food.x, food.y, "#f5c518");
-  }
-
-  function render() {
-    clear();
-    drawFood();
-    drawSnake();
-  }
-
-  /* ========== 食物 ========== */
-  function randomFood() {
-    const occupied = new Set(snake.map(function (s) { return s.x + "," + s.y; }));
-    const free = [];
-    for (let x = 0; x < COLS; x++) {
-      for (let y = 0; y < ROWS; y++) {
-        if (!occupied.has(x + "," + y)) free.push({ x: x, y: y });
-      }
+  function saveHighScore() {
+    if (score > highScore) {
+      highScore = score;
+      highScoreEl.textContent = highScore;
+      try { localStorage.setItem('snake_high_score', highScore); } catch (_) {}
     }
-    if (free.length === 0) return null; // 胜利
-    return free[Math.floor(Math.random() * free.length)];
+  }
+
+  /* ── 食物生成 ── */
+  function randomCell() {
+    return {
+      x: Math.floor(Math.random() * COLS),
+      y: Math.floor(Math.random() * ROWS),
+    };
+  }
+
+  function occupiedSet() {
+    const s = new Set();
+    for (const seg of snake) s.add(`${seg.x},${seg.y}`);
+    return s;
   }
 
   function spawnFood() {
-    food = randomFood();
-    if (!food) {
-      endGame(true);
-    }
+    const occ = occupiedSet();
+    let candidate;
+    let tries = 0;
+    do {
+      candidate = randomCell();
+      tries++;
+      if (tries > COLS * ROWS * 2) break;
+    } while (occ.has(`${candidate.x},${candidate.y}`));
+    food = candidate;
   }
 
-  /* ========== 蛇移动 & 碰撞 ========== */
-  function move() {
-    dir = nextDir; // 应用缓冲方向
-    if (!dir) return;
-
-    const head = snake[0];
-    let newHead;
-    switch (dir) {
-      case "UP":    newHead = { x: head.x, y: head.y - 1 }; break;
-      case "DOWN":  newHead = { x: head.x, y: head.y + 1 }; break;
-      case "LEFT":  newHead = { x: head.x - 1, y: head.y }; break;
-      case "RIGHT": newHead = { x: head.x + 1, y: head.y }; break;
-    }
-
-    // 墙壁碰撞
-    if (newHead.x < 0 || newHead.x >= COLS || newHead.y < 0 || newHead.y >= ROWS) {
-      endGame(false);
-      return;
-    }
-
-    // 自身碰撞（排除尾巴，因为尾巴即将移走 —— 除非刚吃了食物）
-    const willGrow = food && newHead.x === food.x && newHead.y === food.y;
-    const checkBody = willGrow ? snake : snake.slice(0, -1);
-    for (let i = 0; i < checkBody.length; i++) {
-      if (checkBody[i].x === newHead.x && checkBody[i].y === newHead.y) {
-        endGame(false);
-        return;
-      }
-    }
-
-    // 插入新头
-    snake.unshift(newHead);
-
-    if (willGrow) {
-      score += 10;
-      scoreEl.textContent = score;
-      spawnFood();
-      // 不删尾 → 身体增长
-    } else {
-      snake.pop();
-    }
-  }
-
-  /* ========== 游戏循环 ========== */
-  function tick() {
-    if (!running) return;
-    move();
-    render();
-  }
-
-  function startLoop() {
-    stopLoop();
-    gameLoopId = setInterval(tick, BASE_INTERVAL);
-  }
-
-  function stopLoop() {
-    if (gameLoopId) {
-      clearInterval(gameLoopId);
-      gameLoopId = null;
-    }
-  }
-
-  /* ========== 开始 / 结束 ========== */
-  function initState() {
+  /* ── 初始化 / 重置 ── */
+  function initGame() {
     const startX = Math.floor(COLS / 2);
     const startY = Math.floor(ROWS / 2);
     snake = [
-      { x: startX, y: startY },
+      { x: startX,     y: startY },
       { x: startX - 1, y: startY },
       { x: startX - 2, y: startY },
     ];
-    dir = "RIGHT";
-    nextDir = "RIGHT";
+    direction = Dir.RIGHT;
+    nextDirection = Dir.RIGHT;
     score = 0;
-    scoreEl.textContent = "0";
     gameOver = false;
+    paused = false;
+    scoreEl.textContent = '0';
     spawnFood();
+    draw();
+    showOverlay(false);
+  }
+
+  /* ── 移动逻辑 ── */
+  function step() {
+    if (!running || gameOver || paused) return;
+
+    direction = nextDirection;
+
+    const head = snake[0];
+    const newHead = {
+      x: head.x + direction.x,
+      y: head.y + direction.y,
+    };
+
+    // 撞墙检测
+    if (newHead.x < 0 || newHead.x >= COLS || newHead.y < 0 || newHead.y >= ROWS) {
+      return endGame();
+    }
+
+    // 撞自身检测（排除尾部，因为尾部即将移除——除非吃了食物）
+    const willEat = food && newHead.x === food.x && newHead.y === food.y;
+    const bodyCheck = willEat ? snake : snake.slice(0, -1);
+    for (const seg of bodyCheck) {
+      if (seg.x === newHead.x && seg.y === newHead.y) {
+        return endGame();
+      }
+    }
+
+    // 前进
+    snake.unshift(newHead);
+
+    if (willEat) {
+      score++;
+      scoreEl.textContent = score;
+      spawnFood();
+    } else {
+      snake.pop();
+    }
+
+    draw();
+  }
+
+  /* ── 游戏结束 ── */
+  function endGame() {
+    gameOver = true;
+    stopLoop();
+    saveHighScore();
+    draw();
+    showOverlay(true, '游戏结束', '重新开始');
+  }
+
+  /* ── 渲染 ── */
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 绘制网格线
+    ctx.strokeStyle = '#181835';
+    ctx.lineWidth = 0.5;
+    for (let r = 0; r <= ROWS; r++) {
+      ctx.beginPath();
+      ctx.moveTo(0, r * CELL);
+      ctx.lineTo(COLS * CELL, r * CELL);
+      ctx.stroke();
+    }
+    for (let c = 0; c <= COLS; c++) {
+      ctx.beginPath();
+      ctx.moveTo(c * CELL, 0);
+      ctx.lineTo(c * CELL, ROWS * CELL);
+      ctx.stroke();
+    }
+
+    // 绘制食物
+    if (food) {
+      const fx = food.x * CELL + CELL / 2;
+      const fy = food.y * CELL + CELL / 2;
+      const r = CELL / 2 - 3;
+      ctx.fillStyle = '#ff5252';
+      ctx.shadowColor = '#ff5252';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(fx, fy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // 高光
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.beginPath();
+      ctx.arc(fx - r * 0.3, fy - r * 0.3, r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 绘制蛇身
+    for (let i = snake.length - 1; i >= 0; i--) {
+      const seg = snake[i];
+      const sx = seg.x * CELL + GAP;
+      const sy = seg.y * CELL + GAP;
+      const size = CELL - GAP * 2;
+
+      const t = snake.length > 1 ? i / (snake.length - 1) : 0;
+      const r = Math.floor(0  + t * 0);
+      const g = Math.floor(180 + t * 50);
+      const b = Math.floor(80  + t * 100);
+
+      ctx.fillStyle = i === 0
+        ? '#00e676'
+        : `rgb(${r},${g},${b})`;
+      ctx.shadowColor = i === 0 ? '#00e676' : 'transparent';
+      ctx.shadowBlur = i === 0 ? 6 : 0;
+
+      const radius = 5;
+      ctx.beginPath();
+      ctx.moveTo(sx + radius, sy);
+      ctx.lineTo(sx + size - radius, sy);
+      ctx.quadraticCurveTo(sx + size, sy, sx + size, sy + radius);
+      ctx.lineTo(sx + size, sy + size - radius);
+      ctx.quadraticCurveTo(sx + size, sy + size, sx + size - radius, sy + size);
+      ctx.lineTo(sx + radius, sy + size);
+      ctx.quadraticCurveTo(sx, sy + size, sx, sy + size - radius);
+      ctx.lineTo(sx, sy + radius);
+      ctx.quadraticCurveTo(sx, sy, sx + radius, sy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // 蛇头眼睛
+      if (i === 0) {
+        ctx.fillStyle = '#0a0a1a';
+        const cx = seg.x * CELL + CELL / 2;
+        const cy = seg.y * CELL + CELL / 2;
+        const eyeR = 3;
+        let ex1, ey1, ex2, ey2;
+        if (direction.x === 1)      { ex1 = cx + 4; ey1 = cy - 4; ex2 = cx + 4; ey2 = cy + 4; }
+        else if (direction.x === -1) { ex1 = cx - 4; ey1 = cy - 4; ex2 = cx - 4; ey2 = cy + 4; }
+        else if (direction.y === -1) { ex1 = cx - 4; ey1 = cy - 4; ex2 = cx + 4; ey2 = cy - 4; }
+        else                        { ex1 = cx - 4; ey1 = cy + 4; ex2 = cx + 4; ey2 = cy + 4; }
+        ctx.beginPath();
+        ctx.arc(ex1, ey1, eyeR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(ex2, ey2, eyeR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  /* ── Overlay 控制 ── */
+  function showOverlay(visible, text, btnText) {
+    if (visible) {
+      overlay.classList.remove('hidden');
+      overlayText.textContent = text || '';
+      overlayBtn.textContent = btnText || '开始';
+    } else {
+      overlay.classList.add('hidden');
+    }
+  }
+
+  /* ── 主循环 ── */
+  function startLoop() {
+    stopLoop();
+    ticker = setInterval(step, TICK_INTERVAL);
+  }
+
+  function stopLoop() {
+    if (ticker !== null) {
+      clearInterval(ticker);
+      ticker = null;
+    }
   }
 
   function startGame() {
-    if (running) return;
-    if (gameOver) {
-      initState();
-    }
+    initGame();
     running = true;
-    btnStart.textContent = "暂停";
     startLoop();
-    render();
   }
 
-  function pauseGame() {
-    running = false;
-    stopLoop();
-    btnStart.textContent = "继续";
+  function togglePause() {
+    if (!running || gameOver) return;
+    paused = !paused;
+    if (paused) {
+      stopLoop();
+      showOverlay(true, '已暂停', '继续');
+    } else {
+      showOverlay(false);
+      startLoop();
+    }
   }
 
-  function restartGame() {
-    stopLoop();
-    initState();
-    running = false;
-    gameOver = false;
-    btnStart.textContent = "开始游戏";
-    render();
+  /* ── 输入处理 ── */
+  function setDirection(dir) {
+    if (!running || gameOver) return;
+    if (paused && dir) {
+      paused = false;
+      showOverlay(false);
+      startLoop();
+    }
+    if (dir && key(dir) !== OPPOSITE[key(direction)]) {
+      nextDirection = dir;
+    }
   }
 
-  function endGame(won) {
-    running = false;
-    stopLoop();
-    gameOver = true;
-    btnStart.textContent = "开始游戏";
-    const msg = won ? "🎉 你赢了！" : "💀 游戏结束！";
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = "#eee";
-    ctx.font = "bold 28px 'Courier New'";
-    ctx.textAlign = "center";
-    ctx.fillText(msg, W / 2, H / 2 - 14);
-    ctx.font = "18px 'Courier New'";
-    ctx.fillText("最终得分：" + score, W / 2, H / 2 + 22);
-    ctx.textAlign = "start";
-  }
-
-  /* ========== 键盘 ========== */
-  const OPPOSITE = { UP: "DOWN", DOWN: "UP", LEFT: "RIGHT", RIGHT: "LEFT" };
-  const KEY_MAP = {
-    ArrowUp: "UP", ArrowDown: "DOWN", ArrowLeft: "LEFT", ArrowRight: "RIGHT",
-    w: "UP", W: "UP", s: "DOWN", S: "DOWN", a: "LEFT", A: "LEFT", d: "RIGHT", D: "RIGHT",
-  };
-
-  document.addEventListener("keydown", function (e) {
-    const mapped = KEY_MAP[e.key];
-    if (!mapped) return;
-    e.preventDefault();
-    if (!running && !gameOver) {
-      // 未开始 → 首次按键开始
-      startGame();
+  document.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'Escape') {
+      e.preventDefault();
+      if (gameOver) {
+        startGame();
+      } else {
+        togglePause();
+      }
       return;
     }
-    // 不允许反向
-    if (OPPOSITE[mapped] !== dir) {
-      nextDir = mapped;
+    const map = {
+      ArrowUp: Dir.UP,    w: Dir.UP,    W: Dir.UP,
+      ArrowDown: Dir.DOWN,  s: Dir.DOWN,  S: Dir.DOWN,
+      ArrowLeft: Dir.LEFT,  a: Dir.LEFT,  A: Dir.LEFT,
+      ArrowRight: Dir.RIGHT, d: Dir.RIGHT, D: Dir.RIGHT,
+    };
+    const d = map[e.key];
+    if (d) {
+      e.preventDefault();
+      setDirection(d);
     }
   });
 
-  /* ========== 按钮事件 ========== */
-  btnStart.addEventListener("click", function () {
-    if (running) {
-      pauseGame();
-    } else {
+  document.getElementById('btnUp').addEventListener('click',    () => setDirection(Dir.UP));
+  document.getElementById('btnDown').addEventListener('click',  () => setDirection(Dir.DOWN));
+  document.getElementById('btnLeft').addEventListener('click',  () => setDirection(Dir.LEFT));
+  document.getElementById('btnRight').addEventListener('click', () => setDirection(Dir.RIGHT));
+  overlayBtn.addEventListener('click', () => {
+    if (gameOver || !running) {
       startGame();
+    } else if (paused) {
+      togglePause();
     }
   });
 
-  btnRestart.addEventListener("click", function () {
-    restartGame();
-  });
-
-  /* ========== 初始渲染 ========== */
-  initState();
-  render();
+  /* ── 启动 ── */
+  initGame();
+  running = false;
+  gameOver = false;
+  draw();
+  showOverlay(true, '贪吃蛇', '开始游戏');
 })();

@@ -10,19 +10,27 @@
 <body>
   <div class="game-container">
     <div class="header">
-      <h1>🐍 贪吃蛇</h1>
       <div class="score-panel">
-        <span>得分：</span>
-        <span id="score">0</span>
+        <span class="label">当前得分</span>
+        <span id="score" class="value">0</span>
+      </div>
+      <div class="score-panel">
+        <span class="label">最高分</span>
+        <span id="highScore" class="value">0</span>
       </div>
     </div>
     <canvas id="gameCanvas"></canvas>
-    <div class="controls">
-      <button id="btnStart">开始游戏</button>
-      <button id="btnRestart">重新开始</button>
+    <div id="overlay" class="overlay hidden">
+      <div id="overlayText" class="overlay-text"></div>
+      <button id="overlayBtn" class="btn">开始游戏</button>
     </div>
-    <div class="info">
-      <p>方向键 / WASD 控制移动</p>
+    <div class="controls">
+      <button id="btnUp" class="ctrl-btn">▲</button>
+      <div class="ctrl-row">
+        <button id="btnLeft" class="ctrl-btn">◀</button>
+        <button id="btnDown" class="ctrl-btn">▼</button>
+        <button id="btnRight" class="ctrl-btn">▶</button>
+      </div>
     </div>
   </div>
   <script src="game.js"></script>
