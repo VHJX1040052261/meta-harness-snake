@@ -1,350 +1,654 @@
 // game.js
-(() => {
-  /* ── 核心数据结构 ── */
-  const COLS = 20;
+(function () {
+  "use strict";
+
+  // ======================== CONSTANTS ========================
+  const COLS = 10;
   const ROWS = 20;
-  const CELL = 24;
-  const GAP = 1;
-  const TICK_INTERVAL = 130; // ms
+  const CELL = 30;              // pixels per cell
+  const PADDING = 20;
+  const SIDEBAR = 160;
+  const GAP = 30;
 
-  const Dir = Object.freeze({
-    UP:    { x:  0, y: -1 },
-    DOWN:  { x:  0, y:  1 },
-    LEFT:  { x: -1, y:  0 },
-    RIGHT: { x:  1, y:  0 },
-  });
-
-  const OPPOSITE = {
-    [key(Dir.UP)]:    key(Dir.DOWN),
-    [key(Dir.DOWN)]:  key(Dir.UP),
-    [key(Dir.LEFT)]:  key(Dir.RIGHT),
-    [key(Dir.RIGHT)]: key(Dir.LEFT),
+  // Standard 7 Tetrominos — 4 rotation states each (clockwise)
+  const PIECES = {
+    I: {
+      shapes: [
+        [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+        [[0,0,1,0],[0,0,1,0],[0,0,1,0],[0,0,1,0]],
+        [[0,0,0,0],[0,0,0,0],[1,1,1,1],[0,0,0,0]],
+        [[0,1,0,0],[0,1,0,0],[0,1,0,0],[0,1,0,0]]
+      ],
+      color: "#00f0f0"
+    },
+    O: {
+      shapes: [
+        [[1,1],[1,1]],
+        [[1,1],[1,1]],
+        [[1,1],[1,1]],
+        [[1,1],[1,1]]
+      ],
+      color: "#f0f000"
+    },
+    T: {
+      shapes: [
+        [[0,1,0],[1,1,1],[0,0,0]],
+        [[0,1,0],[0,1,1],[0,1,0]],
+        [[0,0,0],[1,1,1],[0,1,0]],
+        [[0,1,0],[1,1,0],[0,1,0]]
+      ],
+      color: "#a000f0"
+    },
+    S: {
+      shapes: [
+        [[0,1,1],[1,1,0],[0,0,0]],
+        [[0,1,0],[0,1,1],[0,0,1]],
+        [[0,0,0],[0,1,1],[1,1,0]],
+        [[1,0,0],[1,1,0],[0,1,0]]
+      ],
+      color: "#00f000"
+    },
+    Z: {
+      shapes: [
+        [[1,1,0],[0,1,1],[0,0,0]],
+        [[0,0,1],[0,1,1],[0,1,0]],
+        [[0,0,0],[1,1,0],[0,1,1]],
+        [[0,1,0],[1,1,0],[1,0,0]]
+      ],
+      color: "#f00000"
+    },
+    J: {
+      shapes: [
+        [[1,0,0],[1,1,1],[0,0,0]],
+        [[0,1,1],[0,1,0],[0,1,0]],
+        [[0,0,0],[1,1,1],[0,0,1]],
+        [[0,1,0],[0,1,0],[1,1,0]]
+      ],
+      color: "#0000f0"
+    },
+    L: {
+      shapes: [
+        [[0,0,1],[1,1,1],[0,0,0]],
+        [[0,1,0],[0,1,0],[0,1,1]],
+        [[0,0,0],[1,1,1],[1,0,0]],
+        [[1,1,0],[0,1,0],[0,1,0]]
+      ],
+      color: "#f0a000"
+    }
   };
 
-  function key(d) { return `${d.x},${d.y}`; }
+  const PIECE_TYPES = ["I", "O", "T", "S", "Z", "J", "L"];
 
-  /* ── DOM 引用 ── */
-  const canvas = document.getElementById('gameCanvas');
-  const ctx = canvas.getContext('2d');
-  canvas.width = COLS * CELL;
-  canvas.height = ROWS * CELL;
+  // ELO scoring table indexed by lines cleared
+  const SCORE_TABLE = [0, 100, 300, 500, 800];
 
-  const scoreEl = document.getElementById('score');
-  const highScoreEl = document.getElementById('highScore');
-  const overlay = document.getElementById('overlay');
-  const overlayText = document.getElementById('overlayText');
-  const overlayBtn = document.getElementById('overlayBtn');
+  function dropInterval(level) {
+    return Math.max(100, 800 - level * 70);
+  }
 
-  /* ── 状态 ── */
-  let snake = [];
-  let food = null;
-  let direction = Dir.RIGHT;
-  let nextDirection = Dir.RIGHT;
+  // ======================== GAME STATE ========================
+  let board = [];
+  let currentPiece = null;
+  let nextType = null;
   let score = 0;
-  let highScore = 0;
-  let ticker = null;
-  let running = false;
+  let level = 0;
+  let linesCleared = 0;
   let gameOver = false;
   let paused = false;
+  let dropTimer = 0;
+  let lastTime = 0;
 
-  /* ── 持久化最高分 ── */
-  try {
-    const saved = localStorage.getItem('snake_high_score');
-    if (saved !== null) highScore = parseInt(saved, 10) || 0;
-  } catch (_) { /* 无 localStorage */ }
-  highScoreEl.textContent = highScore;
+  // Canvas
+  let canvas, ctx;
 
-  function saveHighScore() {
-    if (score > highScore) {
-      highScore = score;
-      highScoreEl.textContent = highScore;
-      try { localStorage.setItem('snake_high_score', highScore); } catch (_) {}
+  // ======================== BOARD ========================
+  function createBoard() {
+    board = [];
+    for (let r = 0; r < ROWS; r++) {
+      board[r] = new Array(COLS).fill(null);
     }
   }
 
-  /* ── 食物生成 ── */
-  function randomCell() {
+  function isInBounds(row, col) {
+    return row >= 0 && row < ROWS && col >= 0 && col < COLS;
+  }
+
+  // ======================== PIECE HELPERS ========================
+  function getShape(type, rotation) {
+    return PIECES[type].shapes[rotation];
+  }
+
+  function getColor(type) {
+    return PIECES[type].color;
+  }
+
+  function createPiece(type) {
+    const shape = getShape(type, 0);
+    const w = shape[0].length;
     return {
-      x: Math.floor(Math.random() * COLS),
-      y: Math.floor(Math.random() * ROWS),
+      type: type,
+      rotation: 0,
+      x: Math.floor((COLS - w) / 2),
+      y: 0
     };
   }
 
-  function occupiedSet() {
-    const s = new Set();
-    for (const seg of snake) s.add(`${seg.x},${seg.y}`);
-    return s;
+  function getCells(piece) {
+    const shape = getShape(piece.type, piece.rotation);
+    const cells = [];
+    for (let r = 0; r < shape.length; r++) {
+      for (let c = 0; c < shape[r].length; c++) {
+        if (shape[r][c]) {
+          cells.push({ row: piece.y + r, col: piece.x + c });
+        }
+      }
+    }
+    return cells;
   }
 
-  function spawnFood() {
-    const occ = occupiedSet();
-    let candidate;
-    let tries = 0;
-    do {
-      candidate = randomCell();
-      tries++;
-      if (tries > COLS * ROWS * 2) break;
-    } while (occ.has(`${candidate.x},${candidate.y}`));
-    food = candidate;
+  // ======================== COLLISION DETECTION ========================
+  function isValidPosition(type, rotation, x, y) {
+    const shape = getShape(type, rotation);
+    for (let r = 0; r < shape.length; r++) {
+      for (let c = 0; c < shape[r].length; c++) {
+        if (!shape[r][c]) continue;
+        const br = y + r;
+        const bc = x + c;
+        if (br < 0 || br >= ROWS || bc < 0 || bc >= COLS) return false;
+        if (board[br][bc] !== null) return false;
+      }
+    }
+    return true;
   }
 
-  /* ── 初始化 / 重置 ── */
-  function initGame() {
-    const startX = Math.floor(COLS / 2);
-    const startY = Math.floor(ROWS / 2);
-    snake = [
-      { x: startX,     y: startY },
-      { x: startX - 1, y: startY },
-      { x: startX - 2, y: startY },
-    ];
-    direction = Dir.RIGHT;
-    nextDirection = Dir.RIGHT;
-    score = 0;
-    gameOver = false;
-    paused = false;
-    scoreEl.textContent = '0';
-    spawnFood();
-    draw();
-    showOverlay(false);
+  function canMove(piece, dx, dy) {
+    return isValidPosition(piece.type, piece.rotation, piece.x + dx, piece.y + dy);
   }
 
-  /* ── 移动逻辑 ── */
-  function step() {
-    if (!running || gameOver || paused) return;
+  function canRotate(piece, cw) {
+    var newRot = cw ? (piece.rotation + 1) % 4 : (piece.rotation + 3) % 4;
 
-    direction = nextDirection;
-
-    const head = snake[0];
-    const newHead = {
-      x: head.x + direction.x,
-      y: head.y + direction.y,
-    };
-
-    // 撞墙检测
-    if (newHead.x < 0 || newHead.x >= COLS || newHead.y < 0 || newHead.y >= ROWS) {
-      return endGame();
+    // Basic rotation without offset
+    if (isValidPosition(piece.type, newRot, piece.x, piece.y)) {
+      return { rotation: newRot, x: piece.x };
     }
 
-    // 撞自身检测（排除尾部，因为尾部即将移除——除非吃了食物）
-    const willEat = food && newHead.x === food.x && newHead.y === food.y;
-    const bodyCheck = willEat ? snake : snake.slice(0, -1);
-    for (const seg of bodyCheck) {
-      if (seg.x === newHead.x && seg.y === newHead.y) {
-        return endGame();
+    // Wall kick — try horizontal offsets ±1, ±2
+    var kicks = cw ? [-1, 1, -2, 2] : [1, -1, 2, -2];
+    for (var i = 0; i < kicks.length; i++) {
+      var dx = kicks[i];
+      if (isValidPosition(piece.type, newRot, piece.x + dx, piece.y)) {
+        return { rotation: newRot, x: piece.x + dx };
       }
     }
 
-    // 前进
-    snake.unshift(newHead);
+    return null; // rotation impossible
+  }
 
-    if (willEat) {
-      score++;
-      scoreEl.textContent = score;
-      spawnFood();
-    } else {
-      snake.pop();
+  // ======================== GHOST PIECE ========================
+  function getGhostY() {
+    var gy = currentPiece.y;
+    while (isValidPosition(currentPiece.type, currentPiece.rotation, currentPiece.x, gy + 1)) {
+      gy++;
+    }
+    return gy;
+  }
+
+  // ======================== MOVEMENT & LOCKING ========================
+  function movePiece(dx) {
+    if (canMove(currentPiece, dx, 0)) {
+      currentPiece.x += dx;
+    }
+  }
+
+  function rotatePiece(cw) {
+    var result = canRotate(currentPiece, cw);
+    if (result !== null) {
+      currentPiece.rotation = result.rotation;
+      currentPiece.x = result.x;
+    }
+  }
+
+  function softDrop() {
+    if (canMove(currentPiece, 0, 1)) {
+      currentPiece.y += 1;
+      return true;
+    }
+    return false;
+  }
+
+  function hardDrop() {
+    while (canMove(currentPiece, 0, 1)) {
+      currentPiece.y += 1;
+    }
+    lockPiece();
+  }
+
+  function lockPiece() {
+    var cells = getCells(currentPiece);
+    for (var i = 0; i < cells.length; i++) {
+      var row = cells[i].row;
+      var col = cells[i].col;
+      if (row >= 0 && row < ROWS && col >= 0 && col < COLS) {
+        board[row][col] = getColor(currentPiece.type);
+      }
+    }
+    clearLines();
+    spawnPiece();
+    dropTimer = 0;
+  }
+
+  // ======================== LINE CLEARING ========================
+  function clearLines() {
+    var cleared = 0;
+    for (var r = ROWS - 1; r >= 0; r--) {
+      if (board[r].every(function (cell) { return cell !== null; })) {
+        board.splice(r, 1);
+        board.unshift(new Array(COLS).fill(null));
+        cleared++;
+        r++; // re-check this index
+      }
     }
 
-    draw();
+    if (cleared > 0) {
+      score += SCORE_TABLE[cleared];
+      linesCleared += cleared;
+      level = Math.floor(linesCleared / 10);
+    }
   }
 
-  /* ── 游戏结束 ── */
-  function endGame() {
-    gameOver = true;
-    stopLoop();
-    saveHighScore();
-    draw();
-    showOverlay(true, '游戏结束', '重新开始');
+  // ======================== SPAWN ========================
+  function randomPieceType() {
+    return PIECE_TYPES[Math.floor(Math.random() * PIECE_TYPES.length)];
   }
 
-  /* ── 渲染 ── */
-  function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  function spawnPiece() {
+    var type = nextType || randomPieceType();
+    nextType = randomPieceType();
+    currentPiece = createPiece(type);
 
-    // 绘制网格线
-    ctx.strokeStyle = '#181835';
+    if (!isValidPosition(currentPiece.type, currentPiece.rotation, currentPiece.x, currentPiece.y)) {
+      gameOver = true;
+    }
+  }
+
+  // ======================== RENDERING ========================
+  function drawCell(row, col, color, alpha) {
+    alpha = alpha === undefined ? 1 : alpha;
+    var x = PADDING + col * CELL;
+    var y = PADDING + row * CELL;
+    var inset = 1;
+
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.fillRect(x + inset, y + inset, CELL - inset * 2, CELL - inset * 2);
+
+    // Top-left highlight
+    ctx.fillStyle = "rgba(255,255,255,0.25)";
+    ctx.fillRect(x + inset, y + inset, CELL - inset * 2, 3);
+    ctx.fillRect(x + inset, y + inset, 3, CELL - inset * 2);
+
+    // Bottom-right shadow
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(x + inset, y + CELL - inset - 3, CELL - inset * 2, 3);
+    ctx.fillRect(x + CELL - inset - 3, y + inset, 3, CELL - inset * 2);
+
+    ctx.globalAlpha = 1;
+  }
+
+  function drawBoard() {
+    var bx = PADDING;
+    var by = PADDING;
+    var bw = COLS * CELL;
+    var bh = ROWS * CELL;
+
+    // Background
+    ctx.fillStyle = "#111";
+    ctx.fillRect(bx, by, bw, bh);
+
+    // Grid lines
+    ctx.strokeStyle = "#1a1a1a";
     ctx.lineWidth = 0.5;
-    for (let r = 0; r <= ROWS; r++) {
+    for (var r = 0; r <= ROWS; r++) {
       ctx.beginPath();
-      ctx.moveTo(0, r * CELL);
-      ctx.lineTo(COLS * CELL, r * CELL);
+      ctx.moveTo(bx, by + r * CELL);
+      ctx.lineTo(bx + bw, by + r * CELL);
       ctx.stroke();
     }
-    for (let c = 0; c <= COLS; c++) {
+    for (var c = 0; c <= COLS; c++) {
       ctx.beginPath();
-      ctx.moveTo(c * CELL, 0);
-      ctx.lineTo(c * CELL, ROWS * CELL);
+      ctx.moveTo(bx + c * CELL, by);
+      ctx.lineTo(bx + c * CELL, by + bh);
       ctx.stroke();
     }
 
-    // 绘制食物
-    if (food) {
-      const fx = food.x * CELL + CELL / 2;
-      const fy = food.y * CELL + CELL / 2;
-      const r = CELL / 2 - 3;
-      ctx.fillStyle = '#ff5252';
-      ctx.shadowColor = '#ff5252';
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.arc(fx, fy, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
+    // Border
+    ctx.strokeStyle = "#555";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, bh);
 
-      // 高光
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx.beginPath();
-      ctx.arc(fx - r * 0.3, fy - r * 0.3, r * 0.35, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // 绘制蛇身
-    for (let i = snake.length - 1; i >= 0; i--) {
-      const seg = snake[i];
-      const sx = seg.x * CELL + GAP;
-      const sy = seg.y * CELL + GAP;
-      const size = CELL - GAP * 2;
-
-      const t = snake.length > 1 ? i / (snake.length - 1) : 0;
-      const r = Math.floor(0  + t * 0);
-      const g = Math.floor(180 + t * 50);
-      const b = Math.floor(80  + t * 100);
-
-      ctx.fillStyle = i === 0
-        ? '#00e676'
-        : `rgb(${r},${g},${b})`;
-      ctx.shadowColor = i === 0 ? '#00e676' : 'transparent';
-      ctx.shadowBlur = i === 0 ? 6 : 0;
-
-      const radius = 5;
-      ctx.beginPath();
-      ctx.moveTo(sx + radius, sy);
-      ctx.lineTo(sx + size - radius, sy);
-      ctx.quadraticCurveTo(sx + size, sy, sx + size, sy + radius);
-      ctx.lineTo(sx + size, sy + size - radius);
-      ctx.quadraticCurveTo(sx + size, sy + size, sx + size - radius, sy + size);
-      ctx.lineTo(sx + radius, sy + size);
-      ctx.quadraticCurveTo(sx, sy + size, sx, sy + size - radius);
-      ctx.lineTo(sx, sy + radius);
-      ctx.quadraticCurveTo(sx, sy, sx + radius, sy);
-      ctx.closePath();
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // 蛇头眼睛
-      if (i === 0) {
-        ctx.fillStyle = '#0a0a1a';
-        const cx = seg.x * CELL + CELL / 2;
-        const cy = seg.y * CELL + CELL / 2;
-        const eyeR = 3;
-        let ex1, ey1, ex2, ey2;
-        if (direction.x === 1)      { ex1 = cx + 4; ey1 = cy - 4; ex2 = cx + 4; ey2 = cy + 4; }
-        else if (direction.x === -1) { ex1 = cx - 4; ey1 = cy - 4; ex2 = cx - 4; ey2 = cy + 4; }
-        else if (direction.y === -1) { ex1 = cx - 4; ey1 = cy - 4; ex2 = cx + 4; ey2 = cy - 4; }
-        else                        { ex1 = cx - 4; ey1 = cy + 4; ex2 = cx + 4; ey2 = cy + 4; }
-        ctx.beginPath();
-        ctx.arc(ex1, ey1, eyeR, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(ex2, ey2, eyeR, 0, Math.PI * 2);
-        ctx.fill();
+    // Locked cells
+    for (var r = 0; r < ROWS; r++) {
+      for (var c = 0; c < COLS; c++) {
+        if (board[r][c] !== null) {
+          drawCell(r, c, board[r][c], 1);
+        }
       }
     }
   }
 
-  /* ── Overlay 控制 ── */
-  function showOverlay(visible, text, btnText) {
-    if (visible) {
-      overlay.classList.remove('hidden');
-      overlayText.textContent = text || '';
-      overlayBtn.textContent = btnText || '开始';
-    } else {
-      overlay.classList.add('hidden');
-    }
-  }
-
-  /* ── 主循环 ── */
-  function startLoop() {
-    stopLoop();
-    ticker = setInterval(step, TICK_INTERVAL);
-  }
-
-  function stopLoop() {
-    if (ticker !== null) {
-      clearInterval(ticker);
-      ticker = null;
-    }
-  }
-
-  function startGame() {
-    initGame();
-    running = true;
-    startLoop();
-  }
-
-  function togglePause() {
-    if (!running || gameOver) return;
-    paused = !paused;
-    if (paused) {
-      stopLoop();
-      showOverlay(true, '已暂停', '继续');
-    } else {
-      showOverlay(false);
-      startLoop();
-    }
-  }
-
-  /* ── 输入处理 ── */
-  function setDirection(dir) {
-    if (!running || gameOver) return;
-    if (paused && dir) {
-      paused = false;
-      showOverlay(false);
-      startLoop();
-    }
-    if (dir && key(dir) !== OPPOSITE[key(direction)]) {
-      nextDirection = dir;
-    }
-  }
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === ' ' || e.key === 'Escape') {
-      e.preventDefault();
-      if (gameOver) {
-        startGame();
-      } else {
-        togglePause();
+  function drawPieceOnBoard(piece, alpha, overrideY) {
+    if (!piece || gameOver) return;
+    var y = overrideY !== undefined ? overrideY : piece.y;
+    var useAlpha = overrideY !== undefined ? 0.25 : (alpha !== undefined ? alpha : 1);
+    var color = getColor(piece.type);
+    var shape = getShape(piece.type, piece.rotation);
+    for (var r = 0; r < shape.length; r++) {
+      for (var c = 0; c < shape[r].length; c++) {
+        if (shape[r][c]) {
+          var row = y + r;
+          if (row >= 0) {
+            drawCell(row, piece.x + c, color, useAlpha);
+          }
+        }
       }
+    }
+  }
+
+  function drawSidebar() {
+    var sx = PADDING + COLS * CELL + GAP;
+    var sy = PADDING;
+
+    // ── Next piece ──
+    ctx.fillStyle = "#ccc";
+    ctx.font = "bold 15px monospace";
+    ctx.fillText("NEXT", sx, sy + 18);
+
+    var prevX = sx;
+    var prevY = sy + 30;
+    var prevW = 130;
+    var prevH = 100;
+    var prevCell = 22;
+
+    ctx.fillStyle = "#111";
+    ctx.fillRect(prevX, prevY, prevW, prevH);
+    ctx.strokeStyle = "#555";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(prevX, prevY, prevW, prevH);
+
+    if (nextType) {
+      var shape = getShape(nextType, 0);
+      var color = getColor(nextType);
+      var rows = shape.length;
+      var cols = shape[0].length;
+      var ox = prevX + (prevW - cols * prevCell) / 2;
+      var oy = prevY + (prevH - rows * prevCell) / 2;
+
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          if (shape[r][c]) {
+            var px = ox + c * prevCell;
+            var py = oy + r * prevCell;
+            var ins = 1;
+            ctx.fillStyle = color;
+            ctx.fillRect(px + ins, py + ins, prevCell - ins * 2, prevCell - ins * 2);
+            ctx.fillStyle = "rgba(255,255,255,0.2)";
+            ctx.fillRect(px + ins, py + ins, prevCell - ins * 2, 2);
+            ctx.fillRect(px + ins, py + ins, 2, prevCell - ins * 2);
+            ctx.fillStyle = "rgba(0,0,0,0.2)";
+            ctx.fillRect(px + ins, py + prevCell - ins - 2, prevCell - ins * 2, 2);
+            ctx.fillRect(px + prevCell - ins - 2, py + ins, 2, prevCell - ins * 2);
+          }
+        }
+      }
+    }
+
+    // ── Stats ──
+    var statsY = prevY + prevH + 28;
+    ctx.fillStyle = "#ccc";
+    ctx.font = "bold 14px monospace";
+    ctx.fillText("SCORE", sx, statsY);
+    ctx.font = "20px monospace";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(String(score), sx, statsY + 22);
+
+    ctx.fillStyle = "#ccc";
+    ctx.font = "bold 14px monospace";
+    ctx.fillText("LEVEL", sx, statsY + 55);
+    ctx.font = "20px monospace";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(String(level), sx, statsY + 77);
+
+    ctx.fillStyle = "#ccc";
+    ctx.font = "bold 14px monospace";
+    ctx.fillText("LINES", sx, statsY + 110);
+    ctx.font = "20px monospace";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(String(linesCleared), sx, statsY + 132);
+
+    // ── Controls ──
+    var helpY = statsY + 175;
+    ctx.font = "12px monospace";
+    ctx.fillStyle = "#666";
+    var controls = [
+      "\u2190 \u2192   Move",
+      "\u2191      Rotate",
+      "\u2193      Soft Drop",
+      "SPC    Hard Drop",
+      "P        Pause",
+      "R        Restart"
+    ];
+    for (var i = 0; i < controls.length; i++) {
+      ctx.fillText(controls[i], sx, helpY + i * 18);
+    }
+  }
+
+  function drawOverlay(text, color) {
+    ctx.fillStyle = "rgba(0,0,0,0.65)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = color;
+    ctx.font = "bold 36px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2 - 10);
+    ctx.textAlign = "start";
+  }
+
+  function drawGameOverScreen() {
+    drawOverlay("GAME OVER", "#f44");
+
+    ctx.fillStyle = "#ddd";
+    ctx.font = "16px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      "Score: " + score + "   Level: " + level + "   Lines: " + linesCleared,
+      canvas.width / 2,
+      canvas.height / 2 + 30
+    );
+    ctx.fillText("Press R to restart", canvas.width / 2, canvas.height / 2 + 56);
+    ctx.textAlign = "start";
+  }
+
+  function render() {
+    ctx.fillStyle = "#0d0d1a";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    drawBoard();
+
+    if (currentPiece && !gameOver) {
+      var ghostY = getGhostY();
+      if (ghostY !== currentPiece.y) {
+        drawPieceOnBoard(currentPiece, undefined, ghostY);
+      }
+      drawPieceOnBoard(currentPiece, 1);
+    }
+
+    drawSidebar();
+
+    if (gameOver) {
+      drawGameOverScreen();
+    } else if (paused) {
+      drawOverlay("PAUSED", "#ff0");
+    }
+  }
+
+  // ======================== GAME LOOP ========================
+  function update(dt) {
+    if (gameOver || paused) return;
+
+    dropTimer += dt;
+    var interval = dropInterval(level);
+
+    while (dropTimer >= interval) {
+      dropTimer -= interval;
+      if (!softDrop()) {
+        lockPiece();
+        break; // lockPiece may set gameOver or spawn a new piece
+      }
+    }
+  }
+
+  function gameLoop(timestamp) {
+    if (lastTime === 0) lastTime = timestamp;
+    var dt = timestamp - lastTime;
+    lastTime = timestamp;
+
+    // Clamp dt to avoid spiral-of-death after tab switch
+    if (dt > 500) dt = 16;
+
+    update(dt);
+    render();
+    requestAnimationFrame(gameLoop);
+  }
+
+  // ======================== INPUT ========================
+  function handleKeyDown(e) {
+    // Global keys
+    if (e.key === "r" || e.key === "R") {
+      restart();
       return;
     }
-    const map = {
-      ArrowUp: Dir.UP,    w: Dir.UP,    W: Dir.UP,
-      ArrowDown: Dir.DOWN,  s: Dir.DOWN,  S: Dir.DOWN,
-      ArrowLeft: Dir.LEFT,  a: Dir.LEFT,  A: Dir.LEFT,
-      ArrowRight: Dir.RIGHT, d: Dir.RIGHT, D: Dir.RIGHT,
-    };
-    const d = map[e.key];
-    if (d) {
-      e.preventDefault();
-      setDirection(d);
-    }
-  });
 
-  document.getElementById('btnUp').addEventListener('click',    () => setDirection(Dir.UP));
-  document.getElementById('btnDown').addEventListener('click',  () => setDirection(Dir.DOWN));
-  document.getElementById('btnLeft').addEventListener('click',  () => setDirection(Dir.LEFT));
-  document.getElementById('btnRight').addEventListener('click', () => setDirection(Dir.RIGHT));
-  overlayBtn.addEventListener('click', () => {
-    if (gameOver || !running) {
-      startGame();
-    } else if (paused) {
-      togglePause();
-    }
-  });
+    if (gameOver) return;
 
-  /* ── 启动 ── */
-  initGame();
-  running = false;
-  gameOver = false;
-  draw();
-  showOverlay(true, '贪吃蛇', '开始游戏');
+    if (e.key === "p" || e.key === "P") {
+      paused = !paused;
+      if (!paused) lastTime = performance.now();
+      return;
+    }
+
+    if (paused) return;
+
+    switch (e.key) {
+      case "ArrowLeft":
+        e.preventDefault();
+        movePiece(-1);
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        movePiece(1);
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        if (!softDrop()) {
+          lockPiece();
+        }
+        dropTimer = 0;
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        rotatePiece(true);
+        break;
+      case " ":
+        e.preventDefault();
+        hardDrop();
+        break;
+    }
+  }
+
+  // ======================== TOUCH CONTROLS ========================
+  var touchStartX = 0;
+  var touchStartY = 0;
+  var touchStartTime = 0;
+
+  function handleTouchStart(e) {
+    e.preventDefault();
+    var t = e.touches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+    touchStartTime = Date.now();
+  }
+
+  function handleTouchEnd(e) {
+    e.preventDefault();
+    if (gameOver || paused) return;
+
+    var t = e.changedTouches[0];
+    var dx = t.clientX - touchStartX;
+    var dy = t.clientY - touchStartY;
+    var dt = Date.now() - touchStartTime;
+    var absDx = Math.abs(dx);
+    var absDy = Math.abs(dy);
+
+    // Quick tap => rotate
+    if (absDx < 12 && absDy < 12 && dt < 250) {
+      rotatePiece(true);
+      return;
+    }
+
+    // Fast downward swipe => hard drop
+    if (dy > 60 && dt < 350) {
+      hardDrop();
+      return;
+    }
+
+    // Horizontal / vertical swipe
+    if (absDx > absDy) {
+      if (dx > 25) movePiece(1);
+      else if (dx < -25) movePiece(-1);
+    } else {
+      if (dy > 25) {
+        if (!softDrop()) lockPiece();
+        dropTimer = 0;
+      }
+    }
+  }
+
+  // ======================== RESTART ========================
+  function restart() {
+    createBoard();
+    currentPiece = null;
+    nextType = null;
+    score = 0;
+    level = 0;
+    linesCleared = 0;
+    gameOver = false;
+    paused = false;
+    dropTimer = 0;
+    lastTime = 0;
+    nextType = randomPieceType();
+    spawnPiece();
+  }
+
+  // ======================== INIT ========================
+  function init() {
+    canvas = document.getElementById("game-canvas");
+    ctx = canvas.getContext("2d");
+
+    var canvasWidth = PADDING * 2 + COLS * CELL + GAP + SIDEBAR;
+    var canvasHeight = PADDING * 2 + ROWS * CELL;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+
+    createBoard();
+    nextType = randomPieceType();
+    spawnPiece();
+
+    document.addEventListener("keydown", handleKeyDown);
+    canvas.addEventListener("touchstart", handleTouchStart, { passive: false });
+    canvas.addEventListener("touchend", handleTouchEnd, { passive: false });
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  window.addEventListener("load", init);
 })();
