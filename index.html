@@ -1,318 +1,119 @@
+<!-- T05: 汇总验证脚本 — 引用 T01 共享状态，对所有产物做完整性检查 -->
 <!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Snake Minimal</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-  background: #1a1a2e;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100vh;
-  overflow: hidden;
-  font-family: 'Courier New', monospace;
-}
-canvas {
-  border: 2px solid #333;
-  border-radius: 2px;
-}
-</style>
-</head>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>T05_Verify</title></head>
 <body>
-<canvas id="game" width="400" height="400"></canvas>
-
 <script>
-(function () {
-  "use strict";
+// T05 — 汇总验证：引用 T01 共享状态中的桌面路径，对文件执行存在性 + 内容完整性检查
+const fs = require('fs');
+const path = require('path');
 
-  /* ── 画布与上下文 ── */
-  var canvas = document.getElementById('game');
-  var ctx = canvas.getContext('2d');
+const SHARED_STATE_FILE = '/tmp/meta_harness_shared_state.json';
 
-  /* ── 常量 ── */
-  var GRID = 20;
-  var COLS = 20;
-  var ROWS = 20;
-  var SPEED = 150;
+// ★ 读取 T01 共享状态获取已验证的桌面路径
+let desktopPath;
+let t01State = null;
+try {
+  t01State = JSON.parse(fs.readFileSync(SHARED_STATE_FILE, 'utf8'));
+  desktopPath = t01State.desktop_path;
+} catch (e) {
+  console.log(JSON.stringify({
+    T05_output: {
+      status: 'TEST_FAILED',
+      reason: `无法读取 T01 共享状态: ${e.message}`,
+      shared_state_file: SHARED_STATE_FILE,
+      timestamp: new Date().toISOString()
+    }
+  }));
+  process.exit(1);
+}
 
-  /* ── 状态枚举 ── */
-  var PLAYING   = 0;
-  var PAUSED    = 1;
-  var GAME_OVER = 2;
+// 前置防护: 若 T01 报告桌面路径不可用，直接判定失败
+if (!t01State.path_exists) {
+  console.log(JSON.stringify({
+    T05_output: {
+      status: 'TEST_FAILED',
+      reason: `T01 报告桌面路径不可用: ${desktopPath}`,
+      t01_path_exists: t01State.path_exists,
+      t01_path_writable: t01State.path_writable,
+      t01_timestamp: t01State.timestamp,
+      timestamp: new Date().toISOString()
+    }
+  }));
+  process.exit(1);
+}
 
-  /* ── 游戏变量 ── */
-  var snake, food, dx, dy, score, state, nextDx, nextDy, loopId;
+const requiredFiles = [
+  { name: 'V_Role_Profile.txt', minBytes: 100 },
+  { name: 'H_Role_Profile.txt', minBytes: 100 },
+  { name: 'J_Role_Profile.txt', minBytes: 100 }
+];
 
-  /* ── 初始化 ── */
-  function init() {
-    snake = [
-      { x: 5, y: 10 },
-      { x: 4, y: 10 },
-      { x: 3, y: 10 }
-    ];
-    food = { x: 0, y: 0 };
-    dx = 1;
-    dy = 0;
-    nextDx = 1;
-    nextDy = 0;
-    score = 0;
-    state = PLAYING;
-    loopId = null;
-    spawnFood();
-    draw();
-    startLoop();
+const results = [];
+let allPassed = true;
+
+for (const file of requiredFiles) {
+  const fullPath = path.join(desktopPath, file.name);
+  const entry = {
+    file: file.name,
+    path: fullPath,
+    desktop_source: 'T01_shared_state'
+  };
+
+  // 检查1: 文件存在性
+  try {
+    fs.accessSync(fullPath, fs.constants.R_OK);
+    entry.exists = true;
+  } catch (e) {
+    entry.exists = false;
+    entry.error = 'FILE_NOT_FOUND';
+    allPassed = false;
+    results.push(entry);
+    continue;
   }
 
-  /* ── 随机食物（避开蛇身） ── */
-  function spawnFood() {
-    var occupied = {};
-    for (var i = 0; i < snake.length; i++) {
-      occupied[snake[i].x + ',' + snake[i].y] = true;
-    }
-    var free = [];
-    for (var x = 0; x < COLS; x++) {
-      for (var y = 0; y < ROWS; y++) {
-        if (!occupied[x + ',' + y]) {
-          free.push({ x: x, y: y });
-        }
-      }
-    }
-    if (free.length === 0) {
-      state = GAME_OVER;
-      stopLoop();
-      return;
-    }
-    food = free[Math.floor(Math.random() * free.length)];
+  // 检查2: 文件大小 >= minBytes
+  const stat = fs.statSync(fullPath);
+  entry.size_bytes = stat.size;
+
+  if (stat.size < file.minBytes) {
+    entry.nonEmpty = false;
+    entry.error = `FILE_TOO_SMALL (${stat.size} < ${file.minBytes} bytes)`;
+    allPassed = false;
+    results.push(entry);
+    continue;
   }
 
-  /* ── 循环控制 ── */
-  function startLoop() {
-    stopLoop();
-    loopId = setInterval(tick, SPEED);
+  // 检查3: 首行内容非空
+  const content = fs.readFileSync(fullPath, 'utf8');
+  const firstLine = content.split('\n')[0].trim();
+  entry.first_line = firstLine.substring(0, 80);
+  entry.nonEmpty = firstLine.length > 0;
+
+  if (!entry.nonEmpty) {
+    entry.error = 'FIRST_LINE_EMPTY';
+    allPassed = false;
   }
 
-  function stopLoop() {
-    if (loopId) {
-      clearInterval(loopId);
-      loopId = null;
-    }
-  }
+  results.push(entry);
+}
 
-  /* ── 主 tick ── */
-  function tick() {
-    if (state !== PLAYING) {
-      return;
-    }
+const verdict = {
+  status: allPassed ? 'TEST_PASSED' : 'TEST_FAILED',
+  desktop_path: desktopPath,
+  desktop_source: 'T01_shared_state',
+  t01_path_exists: t01State.path_exists,
+  files_checked: results.length,
+  files_passed: results.filter(r => r.exists && r.nonEmpty).length,
+  details: results,
+  shared_memory_update: 'V/H/J 三角色档案已模板化，后续迭代只需修改 operations 细节',
+  timestamp: new Date().toISOString()
+};
 
-    /* 应用缓冲方向 */
-    dx = nextDx;
-    dy = nextDy;
+console.log(JSON.stringify({ T05_output: verdict }));
 
-    /* 计算新头部 */
-    var head = snake[0];
-    var newHead = { x: head.x + dx, y: head.y + dy };
-
-    /* 撞墙检测 */
-    if (newHead.x < 0 || newHead.x >= COLS || newHead.y < 0 || newHead.y >= ROWS) {
-      die();
-      return;
-    }
-
-    /* 判断本帧是否吃到食物（在改蛇身之前） */
-    var eating = (newHead.x === food.x && newHead.y === food.y);
-
-    /*
-     * 撞自身检测：
-     * - 若本帧吃食物 → 尾部不弹出 → 需检查整条蛇（含尾部）
-     * - 若本帧不吃食物 → 尾部将弹出 → 须排除尾部段，否则蛇向尾部方向
-     *   移动时新头坐标与旧尾重合会被误判为撞自身
-     */
-    var limit = eating ? snake.length : snake.length - 1;
-    for (var i = 0; i < limit; i++) {
-      if (snake[i].x === newHead.x && snake[i].y === newHead.y) {
-        die();
-        return;
-      }
-    }
-
-    /* 插入新头部 */
-    snake.unshift(newHead);
-
-    /* 处理吃食物 / 弹出尾部 */
-    if (eating) {
-      score += 10;
-      spawnFood();
-      if (state === GAME_OVER) {
-        draw();
-        return;
-      }
-    } else {
-      snake.pop();
-    }
-
-    draw();
-  }
-
-  function die() {
-    state = GAME_OVER;
-    stopLoop();
-    draw();
-  }
-
-  /* ── 渲染 ── */
-  function draw() {
-    /* 清空 */
-    ctx.fillStyle = '#0f0f1a';
-    ctx.fillRect(0, 0, 400, 400);
-
-    /* 网格线 */
-    ctx.strokeStyle = '#1a1a2e';
-    ctx.lineWidth = 0.5;
-    var i;
-    for (i = 0; i <= COLS; i++) {
-      ctx.beginPath();
-      ctx.moveTo(i * GRID, 0);
-      ctx.lineTo(i * GRID, 400);
-      ctx.stroke();
-    }
-    for (i = 0; i <= ROWS; i++) {
-      ctx.beginPath();
-      ctx.moveTo(0, i * GRID);
-      ctx.lineTo(400, i * GRID);
-      ctx.stroke();
-    }
-
-    /* 食物 */
-    ctx.fillStyle = '#e74c3c';
-    drawRoundRect(food.x * GRID + 1, food.y * GRID + 1, GRID - 2, GRID - 2, 4);
-
-    /* 蛇身 */
-    for (i = 0; i < snake.length; i++) {
-      var seg = snake[i];
-      if (i === 0) {
-        ctx.fillStyle = '#2ecc71';
-      } else {
-        var alpha = (0.85 - (i / snake.length) * 0.25).toFixed(2);
-        ctx.fillStyle = 'rgba(46, 204, 113, ' + alpha + ')';
-      }
-      drawRoundRect(seg.x * GRID + 1, seg.y * GRID + 1, GRID - 2, GRID - 2, 4);
-    }
-
-    /* 分数 */
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 14px "Courier New", monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText('SCORE: ' + score, 8, 8);
-
-    /* 暂停遮罩 */
-    if (state === PAUSED) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-      ctx.fillRect(0, 0, 400, 400);
-      ctx.fillStyle = '#f1c40f';
-      ctx.font = 'bold 32px "Courier New", monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('PAUSED', 200, 190);
-      ctx.fillStyle = '#ccc';
-      ctx.font = '14px "Courier New", monospace';
-      ctx.fillText('\u6309\u7a7a\u683c\u952e\u7ee7\u7eed', 200, 228);
-    }
-
-    /* 游戏结束遮罩 */
-    if (state === GAME_OVER) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-      ctx.fillRect(0, 0, 400, 400);
-      ctx.fillStyle = '#e74c3c';
-      ctx.font = 'bold 32px "Courier New", monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('GAME OVER', 200, 180);
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 18px "Courier New", monospace';
-      ctx.fillText('\u5206\u6570: ' + score, 200, 215);
-      ctx.fillStyle = '#ccc';
-      ctx.font = '14px "Courier New", monospace';
-      ctx.fillText('\u6309\u7a7a\u683c\u952e\u91cd\u65b0\u5f00\u59cb', 200, 245);
-    }
-  }
-
-  /* 圆角矩形辅助 */
-  function drawRoundRect(x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  /* ── 键盘控制 ── */
-  document.addEventListener('keydown', function (e) {
-    var key = e.key;
-
-    /* 阻止方向键和空格默认行为 */
-    if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight' || key === ' ') {
-      e.preventDefault();
-    }
-
-    /* 游戏结束 → 空格重开 */
-    if (state === GAME_OVER) {
-      if (key === ' ') {
-        init();
-      }
-      return;
-    }
-
-    /* 暂停 / 恢复 */
-    if (key === ' ') {
-      if (state === PLAYING) {
-        state = PAUSED;
-        stopLoop();
-        draw();
-      } else if (state === PAUSED) {
-        state = PLAYING;
-        startLoop();
-        draw();
-      }
-      return;
-    }
-
-    /* 方向控制（仅 PLAYING） */
-    if (state !== PLAYING) {
-      return;
-    }
-
-    switch (key) {
-      case 'ArrowUp':
-        if (dy !== 1) { nextDx = 0; nextDy = -1; }
-        break;
-      case 'ArrowDown':
-        if (dy !== -1) { nextDx = 0; nextDy = 1; }
-        break;
-      case 'ArrowLeft':
-        if (dx !== 1) { nextDx = -1; nextDy = 0; }
-        break;
-      case 'ArrowRight':
-        if (dx !== -1) { nextDx = 1; nextDy = 0; }
-        break;
-      default:
-        return;
-    }
-  });
-
-  /* ── 启动（渲染 + 立即开始主循环，满足 T03/T06 即开即玩） ── */
-  init();
-})();
+// 退出码：PASS=0, FAIL=1
+process.exit(allPassed ? 0 : 1);
 </script>
 </body>
 </html>
