@@ -1,727 +1,316 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>俄罗斯方块</title>
+<title>Snake Minimal</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: #1a1a2e;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    font-family: 'Courier New', monospace;
-    flex-direction: column;
-    gap: 20px;
-  }
-  #game-container {
-    display: flex;
-    gap: 30px;
-    align-items: flex-start;
-  }
-  #board-wrapper {
-    position: relative;
-    border: 3px solid #e94560;
-    border-radius: 6px;
-    box-shadow: 0 0 20px rgba(233,69,96,0.4);
-  }
-  canvas#board {
-    display: block;
-    background: #16213e;
-  }
-  #side-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    align-items: center;
-  }
-  .panel-box {
-    background: #16213e;
-    border: 2px solid #533483;
-    border-radius: 8px;
-    padding: 15px 20px;
-    color: #eaeaea;
-    text-align: center;
-    min-width: 120px;
-  }
-  .panel-box h3 {
-    font-size: 12px;
-    letter-spacing: 2px;
-    color: #e94560;
-    margin-bottom: 8px;
-    text-transform: uppercase;
-  }
-  #score { font-size: 28px; font-weight: bold; color: #fff; }
-  #lines { font-size: 20px; color: #c0c0c0; }
-  #level { font-size: 20px; color: #e94560; }
-  #next-piece-canvas {
-    display: block;
-    background: transparent;
-    margin: 0 auto;
-  }
-  #game-status {
-    color: #ffd700;
-    font-size: 14px;
-    min-height: 20px;
-    letter-spacing: 1px;
-  }
-  .control-hint {
-    color: #888;
-    font-size: 11px;
-    line-height: 1.6;
-    text-align: left;
-  }
-  .control-hint span { color: #e94560; font-weight: bold; }
-  h1 {
-    color: #e94560;
-    font-size: 32px;
-    letter-spacing: 4px;
-    text-shadow: 0 0 10px rgba(233,69,96,0.5);
-  }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+}
+canvas {
+  border: 2px solid #333;
+  border-radius: 2px;
+}
 </style>
 </head>
 <body>
-
-<h1>TETRIS</h1>
-
-<div id="game-container">
-  <div id="board-wrapper">
-    <canvas id="board"></canvas>
-  </div>
-
-  <div id="side-panel">
-    <div class="panel-box">
-      <h3>分数</h3>
-      <div id="score">0</div>
-    </div>
-    <div class="panel-box">
-      <h3>行数</h3>
-      <div id="lines">0</div>
-    </div>
-    <div class="panel-box">
-      <h3>等级</h3>
-      <div id="level">0</div>
-    </div>
-    <div class="panel-box">
-      <h3>下一个</h3>
-      <canvas id="next-piece-canvas" width="120" height="120"></canvas>
-    </div>
-    <div id="game-status">▶ 游戏中</div>
-    <div class="panel-box control-hint">
-      <span>← →</span> 移动<br>
-      <span>↑</span> 旋转<br>
-      <span>↓</span> 软降<br>
-      <span>空格</span> 硬降<br>
-      <span>P</span> 暂停
-    </div>
-  </div>
-</div>
+<canvas id="game" width="400" height="400"></canvas>
 
 <script>
-(function() {
-  // ============ 常量 ============
-  const COLS = 10;
-  const ROWS = 20;
-  const CELL  = 30; // px/格
-  const COLORS = {
-    I: '#00f0f0', // 青色
-    O: '#f0f000', // 黄色
-    T: '#a000f0', // 紫色
-    S: '#00f000', // 绿色
-    Z: '#f00000', // 红色
-    J: '#0000f0', // 蓝色
-    L: '#f0a000', // 橙色
-  };
-  const COLOR_LIGHT = {
-    I: '#7effff', O: '#ffff7e', T: '#d07eff', S: '#7eff7e',
-    Z: '#ff7e7e', J: '#7e7eff', L: '#ffd07e',
-  };
+(function () {
+  "use strict";
 
-  // ============ 方块数据结构 (任务2) ============
-  // 每种方块 4 个旋转状态，每个状态是 4 个 [x, y] 坐标偏移
-  const TETROMINOS = {
-    I: [
-      [[0,0],[1,0],[2,0],[3,0]],   // 0: ■■■■
-      [[2,0],[2,1],[2,2],[2,3]],   // 1: 竖
-      [[0,2],[1,2],[2,2],[3,2]],   // 2: ■■■■
-      [[1,0],[1,1],[1,2],[1,3]],   // 3: 竖
-    ],
-    O: [
-      [[0,0],[1,0],[0,1],[1,1]],   // 0: ■■
-      [[0,0],[1,0],[0,1],[1,1]],   //    ■■ (不变)
-      [[0,0],[1,0],[0,1],[1,1]],
-      [[0,0],[1,0],[0,1],[1,1]],
-    ],
-    T: [
-      [[1,0],[0,1],[1,1],[2,1]],   // 0:  ■
-      [[1,0],[1,1],[2,1],[1,2]],   // 1: ■■
-      [[0,1],[1,1],[2,1],[1,2]],   // 2: ■
-      [[1,0],[0,1],[1,1],[1,2]],   // 3: ■■
-    ],
-    S: [
-      [[1,0],[2,0],[0,1],[1,1]],   // 0:  ■■
-      [[1,0],[1,1],[2,1],[2,2]],   // 1: ■
-      [[1,1],[2,1],[0,2],[1,2]],   // 2: ■■
-      [[0,0],[0,1],[1,1],[1,2]],   // 3: ■
-    ],
-    Z: [
-      [[0,0],[1,0],[1,1],[2,1]],   // 0: ■■
-      [[2,0],[1,1],[2,1],[1,2]],   // 1:  ■■
-      [[0,1],[1,1],[1,2],[2,2]],   // 2: ■■
-      [[1,0],[0,1],[1,1],[0,2]],   // 3:  ■■
-    ],
-    J: [
-      [[0,0],[0,1],[1,1],[2,1]],   // 0: ■
-      [[1,0],[2,0],[1,1],[1,2]],   // 1: ■■■
-      [[0,1],[1,1],[2,1],[2,2]],   // 2:   ■
-      [[1,0],[1,1],[0,2],[1,2]],   // 3: ■■■
-    ],
-    L: [
-      [[2,0],[0,1],[1,1],[2,1]],   // 0:   ■
-      [[1,0],[1,1],[1,2],[2,2]],   // 1: ■■■
-      [[0,1],[1,1],[2,1],[0,2]],   // 2: ■
-      [[0,0],[1,0],[1,1],[1,2]],   // 3: ■■■
-    ],
-  };
+  /* ── 画布与上下文 ── */
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
 
-  const PIECE_NAMES = ['I','O','T','S','Z','J','L'];
+  /* ── 常量 ── */
+  var GRID = 20;
+  var COLS = 20;
+  var ROWS = 20;
+  var SPEED = 150;
 
-  // ============ 游戏状态 (任务3) ============
-  let grid    = [];        // 10x20, 0=空, 非0=字符串类型名
-  let activePiece = null; // { type, rotation, x, y }
-  let nextType = null;
-  let score      = 0;
-  let totalLines = 0;
-  let gameOver   = false;
-  let paused     = false;
-  let dropTimer  = null;
-  let animationId= null;
+  /* ── 状态枚举 ── */
+  var PLAYING   = 0;
+  var PAUSED    = 1;
+  var GAME_OVER = 2;
 
-  // ============ DOM ============
-  const canvas    = document.getElementById('board');
-  const ctx       = canvas.getContext('2d');
-  const scoreEl   = document.getElementById('score');
-  const linesEl   = document.getElementById('lines');
-  const levelEl   = document.getElementById('level');
-  const statusEl  = document.getElementById('game-status');
-  const nextCanvas = document.getElementById('next-piece-canvas');
-  const nextCtx    = nextCanvas.getContext('2d');
+  /* ── 游戏变量 ── */
+  var snake, food, dx, dy, score, state, nextDx, nextDy, loopId;
 
-  canvas.width  = COLS * CELL;
-  canvas.height = ROWS * CELL;
-
-  // ============ 辅助函数 ============
-  function createGrid() {
-    const g = [];
-    for (let r = 0; r < ROWS; r++) {
-      g[r] = new Array(COLS).fill(0);
-    }
-    return g;
+  /* ── 初始化 ── */
+  function init() {
+    snake = [
+      { x: 5, y: 10 },
+      { x: 4, y: 10 },
+      { x: 3, y: 10 }
+    ];
+    food = { x: 0, y: 0 };
+    dx = 1;
+    dy = 0;
+    nextDx = 1;
+    nextDy = 0;
+    score = 0;
+    state = PLAYING;
+    loopId = null;
+    spawnFood();
+    draw();
+    startLoop();
   }
 
-  function randomPiece() {
-    return PIECE_NAMES[Math.floor(Math.random() * PIECE_NAMES.length)];
-  }
-
-  // 获取方块在指定旋转状态下的绝对坐标
-  function getAbsoluteCells(type, rotation, px, py) {
-    const shape = TETROMINOS[type][rotation];
-    return shape.map(([cx, cy]) => [px + cx, py + cy]);
-  }
-
-  // 获取当前活动方块的绝对坐标
-  function getActiveCells() {
-    if (!activePiece) return [];
-    return getAbsoluteCells(activePiece.type, activePiece.rotation, activePiece.x, activePiece.y);
-  }
-
-  // ============ 碰撞检测 (任务4) ============
-  function collides(type, rotation, px, py) {
-    const cells = getAbsoluteCells(type, rotation, px, py);
-    for (const [cx, cy] of cells) {
-      if (cx < 0 || cx >= COLS || cy >= ROWS) return true;
-      if (cy >= 0 && grid[cy][cx] !== 0) return true;
+  /* ── 随机食物（避开蛇身） ── */
+  function spawnFood() {
+    var occupied = {};
+    for (var i = 0; i < snake.length; i++) {
+      occupied[snake[i].x + ',' + snake[i].y] = true;
     }
-    return false;
-  }
-
-  // ============ 锁定方块到grid ============
-  function lockPiece() {
-    const cells = getActiveCells();
-    for (const [cx, cy] of cells) {
-      if (cy < 0) {
-        endGame();
-        return;
-      }
-      grid[cy][cx] = activePiece.type;
-    }
-  }
-
-  // ============ 方块移动和旋转 (任务5) ============
-  function moveLeft() {
-    if (!activePiece || gameOver || paused) return false;
-    if (!collides(activePiece.type, activePiece.rotation, activePiece.x - 1, activePiece.y)) {
-      activePiece.x--;
-      return true;
-    }
-    return false;
-  }
-
-  function moveRight() {
-    if (!activePiece || gameOver || paused) return false;
-    if (!collides(activePiece.type, activePiece.rotation, activePiece.x + 1, activePiece.y)) {
-      activePiece.x++;
-      return true;
-    }
-    return false;
-  }
-
-  function softDrop() {
-    if (!activePiece || gameOver || paused) return false;
-    if (!collides(activePiece.type, activePiece.rotation, activePiece.x, activePiece.y + 1)) {
-      activePiece.y++;
-      return true;
-    }
-    return false;
-  }
-
-  function hardDrop() {
-    if (!activePiece || gameOver || paused) return;
-    while (!collides(activePiece.type, activePiece.rotation, activePiece.x, activePiece.y + 1)) {
-      activePiece.y++;
-    }
-    // 立即锁定
-    lockAndSpawn();
-  }
-
-  function rotatePiece() {
-    if (!activePiece || gameOver || paused) return;
-    const oldRotation = activePiece.rotation;
-    const newRotation = (oldRotation + 1) % 4;
-
-    // SRS 简化版：先尝试直接旋转
-    if (!collides(activePiece.type, newRotation, activePiece.x, activePiece.y)) {
-      activePiece.rotation = newRotation;
-      return;
-    }
-
-    // 墙踢: 左尝试
-    if (!collides(activePiece.type, newRotation, activePiece.x - 1, activePiece.y)) {
-      activePiece.rotation = newRotation;
-      activePiece.x -= 1;
-      return;
-    }
-
-    // 墙踢: 右尝试
-    if (!collides(activePiece.type, newRotation, activePiece.x + 1, activePiece.y)) {
-      activePiece.rotation = newRotation;
-      activePiece.x += 1;
-      return;
-    }
-
-    // I 方块额外踢墙 ±2
-    if (activePiece.type === 'I') {
-      if (!collides(activePiece.type, newRotation, activePiece.x - 2, activePiece.y)) {
-        activePiece.rotation = newRotation;
-        activePiece.x -= 2;
-        return;
-      }
-      if (!collides(activePiece.type, newRotation, activePiece.x + 2, activePiece.y)) {
-        activePiece.rotation = newRotation;
-        activePiece.x += 2;
-        return;
+    var free = [];
+    for (var x = 0; x < COLS; x++) {
+      for (var y = 0; y < ROWS; y++) {
+        if (!occupied[x + ',' + y]) {
+          free.push({ x: x, y: y });
+        }
       }
     }
-  }
-
-  // ============ 行消除 (任务6) ============
-  function clearLines() {
-    let cleared = 0;
-    for (let r = ROWS - 1; r >= 0; r--) {
-      if (grid[r].every(cell => cell !== 0)) {
-        // 移除该行，上方下移
-        grid.splice(r, 1);
-        grid.unshift(new Array(COLS).fill(0));
-        cleared++;
-        r++; // 重新检查当前行(因为上面行移下来了)
-      }
-    }
-
-    if (cleared > 0) {
-      totalLines += cleared;
-      const points = [0, 100, 300, 500, 800];
-      score += points[cleared];
-      updateDisplay();
-    }
-  }
-
-  // ============ 生成新方块 ============
-  function spawnPiece() {
-    const type = nextType || randomPiece();
-    nextType = randomPiece();
-    const rotation = 0;
-    const x = Math.floor((COLS - 4) / 2); // 顶部中央
-    const y = 0;
-
-    if (collides(type, rotation, x, y)) {
-      // 新方块刚生成就碰撞 → 游戏结束
-      activePiece = { type, rotation, x, y };
-      endGame();
+    if (free.length === 0) {
+      state = GAME_OVER;
+      stopLoop();
       return;
     }
-
-    activePiece = { type, rotation, x, y };
-    renderNextPiece();
+    food = free[Math.floor(Math.random() * free.length)];
   }
 
-  function lockAndSpawn() {
-    lockPiece();
-    clearLines();
-    if (!gameOver) {
-      spawnPiece();
-    }
-  }
-
-  // ============ 游戏结束 ============
-  function endGame() {
-    gameOver = true;
-    statusEl.textContent = '游戏结束';
-    statusEl.style.color = '#ff4444';
+  /* ── 循环控制 ── */
+  function startLoop() {
     stopLoop();
-  }
-
-  // ============ UI 更新 ============
-  function updateDisplay() {
-    scoreEl.textContent = score;
-    linesEl.textContent = totalLines;
-    const lvl = Math.floor(totalLines / 10);
-    levelEl.textContent = lvl;
-  }
-
-  // ============ 渲染 (任务8) ============
-  function render() {
-    // 清空画布
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // 绘制网格线
-    ctx.strokeStyle = '#1a1a3e';
-    ctx.lineWidth = 0.5;
-    for (let r = 0; r <= ROWS; r++) {
-      ctx.beginPath();
-      ctx.moveTo(0, r * CELL); ctx.lineTo(canvas.width, r * CELL);
-      ctx.stroke();
-    }
-    for (let c = 0; c <= COLS; c++) {
-      ctx.beginPath();
-      ctx.moveTo(c * CELL, 0); ctx.lineTo(c * CELL, canvas.height);
-      ctx.stroke();
-    }
-
-    // 绘制已锁定方块(grid)
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        if (grid[r][c] !== 0) {
-          drawCell(ctx, c, r, grid[r][c], false);
-        }
-      }
-    }
-
-    // 绘制活动方块(带投影)
-    if (activePiece && !gameOver) {
-      // 计算投影位置
-      let ghostY = activePiece.y;
-      while (!collides(activePiece.type, activePiece.rotation, activePiece.x, ghostY + 1)) {
-        ghostY++;
-      }
-
-      const cells = getActiveCells();
-
-      // 绘制投影
-      if (ghostY !== activePiece.y) {
-        for (const [cx, cy] of cells) {
-          const gy = cy - activePiece.y + ghostY;
-          if (gy >= 0) {
-            drawGhostCell(ctx, cx, gy, activePiece.type);
-          }
-        }
-      }
-
-      // 绘制活动方块
-      for (const [cx, cy] of cells) {
-        if (cy >= 0) {
-          drawCell(ctx, cx, cy, activePiece.type, true);
-        }
-      }
-    }
-
-    // 游戏结束蒙层
-    if (gameOver) {
-      ctx.fillStyle = 'rgba(0,0,0,0.65)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#e94560';
-      ctx.font = 'bold 28px "Courier New"';
-      ctx.textAlign = 'center';
-      ctx.fillText('GAME', canvas.width/2, canvas.height/2 - 14);
-      ctx.fillText('OVER', canvas.width/2, canvas.height/2 + 20);
-      ctx.textAlign = 'start';
-    }
-
-    // 暂停提示
-    if (paused && !gameOver) {
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#ffd700';
-      ctx.font = 'bold 24px "Courier New"';
-      ctx.textAlign = 'center';
-      ctx.fillText('暂停', canvas.width/2, canvas.height/2);
-      ctx.textAlign = 'start';
-    }
-  }
-
-  function drawCell(context, cx, cy, type, active) {
-    const x = cx * CELL, y = cy * CELL;
-    const color = active ? COLORS[type] : '#555';
-    const light = active ? COLOR_LIGHT[type] : '#777';
-    const dark  = active ? shadeColor(COLORS[type], -40) : '#333';
-
-    // 主体
-    context.fillStyle = color;
-    context.fillRect(x + 1, y + 1, CELL - 2, CELL - 2);
-
-    // 高光边(左上)
-    context.fillStyle = light;
-    context.fillRect(x + 1, y + 1, CELL - 2, 3);
-    context.fillRect(x + 1, y + 1, 3, CELL - 2);
-
-    // 阴影边(右下)
-    context.fillStyle = dark;
-    context.fillRect(x + 1, y + CELL - 4, CELL - 2, 3);
-    context.fillRect(x + CELL - 4, y + 1, 3, CELL - 2);
-
-    // 内部光泽
-    context.fillStyle = light;
-    context.globalAlpha = 0.25;
-    context.fillRect(x + 4, y + 2, CELL - 8, CELL / 2 - 2);
-    context.globalAlpha = 1;
-  }
-
-  function drawGhostCell(context, cx, cy, type) {
-    const x = cx * CELL, y = cy * CELL;
-    context.strokeStyle = COLORS[type];
-    context.globalAlpha = 0.35;
-    context.lineWidth = 2;
-    context.strokeRect(x + 2, y + 2, CELL - 4, CELL - 4);
-    context.globalAlpha = 1;
-    context.lineWidth = 1;
-  }
-
-  function shadeColor(color, percent) {
-    const num = parseInt(color.replace('#',''), 16);
-    const amt = Math.round(2.55 * percent);
-    const R = Math.min(255, Math.max(0, (num >> 16) + amt));
-    const G = Math.min(255, Math.max(0, (num >> 8 & 0x00FF) + amt));
-    const B = Math.min(255, Math.max(0, (num & 0x0000FF) + amt));
-    return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
-  }
-
-  function renderNextPiece() {
-    nextCtx.clearRect(0, 0, 120, 120);
-    if (!nextType) return;
-
-    const shape = TETROMINOS[nextType][0];
-    // 居中计算
-    let minX = 4, maxX = 0, minY = 4, maxY = 0;
-    for (const [cx, cy] of shape) {
-      if (cx < minX) minX = cx;
-      if (cx > maxX) maxX = cx;
-      if (cy < minY) minY = cy;
-      if (cy > maxY) maxY = cy;
-    }
-    const w = maxX - minX + 1, h = maxY - minY + 1;
-    const offsetX = (4 - w) / 2 - minX;
-    const offsetY = (4 - h) / 2 - minY;
-    const size = 22;
-
-    for (const [cx, cy] of shape) {
-      const nx = (cx + offsetX) * size + (120 - 4 * size) / 2;
-      const ny = (cy + offsetY) * size + (120 - 4 * size) / 2;
-
-      nextCtx.fillStyle = COLORS[nextType];
-      nextCtx.fillRect(nx + 1, ny + 1, size - 2, size - 2);
-
-      nextCtx.fillStyle = COLOR_LIGHT[nextType];
-      nextCtx.fillRect(nx + 1, ny + 1, size - 2, 2);
-      nextCtx.fillRect(nx + 1, ny + 1, 2, size - 2);
-
-      nextCtx.fillStyle = shadeColor(COLORS[nextType], -40);
-      nextCtx.fillRect(nx + 1, ny + size - 3, size - 2, 2);
-      nextCtx.fillRect(nx + size - 3, ny + 1, 2, size - 2);
-    }
-  }
-
-  // ============ 游戏主循环 (任务7) ============
-  function getDropInterval() {
-    const lvl = Math.floor(totalLines / 10);
-    const interval = Math.max(100, 800 - lvl * 50);
-    return interval;
-  }
-
-  function step() {
-    if (gameOver || paused) return;
-
-    if (!activePiece) {
-      spawnPiece();
-      return;
-    }
-
-    if (!collides(activePiece.type, activePiece.rotation, activePiece.x, activePiece.y + 1)) {
-      activePiece.y++;
-    } else {
-      lockAndSpawn();
-    }
-  }
-
-  function startDropLoop() {
-    stopDropLoop();
-    dropTimer = setInterval(() => {
-      step();
-      render();
-    }, getDropInterval());
-  }
-
-  function stopDropLoop() {
-    if (dropTimer) {
-      clearInterval(dropTimer);
-      dropTimer = null;
-    }
-  }
-
-  function startRenderLoop() {
-    stopRenderLoop();
-    function loop() {
-      render();
-      animationId = requestAnimationFrame(loop);
-    }
-    animationId = requestAnimationFrame(loop);
-  }
-
-  function stopRenderLoop() {
-    if (animationId) {
-      cancelAnimationFrame(animationId);
-      animationId = null;
-    }
+    loopId = setInterval(tick, SPEED);
   }
 
   function stopLoop() {
-    stopDropLoop();
-    stopRenderLoop();
-  }
-
-  // 速度变化时重建定时器
-  let lastInterval = 0;
-  function checkSpeedChange() {
-    const cur = getDropInterval();
-    if (cur !== lastInterval && !gameOver && !paused) {
-      lastInterval = cur;
-      startDropLoop();
+    if (loopId) {
+      clearInterval(loopId);
+      loopId = null;
     }
   }
 
-  // 覆盖 step / lockAndSpawn 以检测速度变化
-  const origStep = step;
-  step = function() {
-    origStep();
-    checkSpeedChange();
-  };
-  const origLockAndSpawn = lockAndSpawn;
-  lockAndSpawn = function() {
-    origLockAndSpawn();
-    checkSpeedChange();
-  };
+  /* ── 主 tick ── */
+  function tick() {
+    if (state !== PLAYING) {
+      return;
+    }
 
-  // ============ 键盘输入 (任务8) ============
-  document.addEventListener('keydown', (e) => {
-    if (gameOver) {
-      if (e.key === 'r' || e.key === 'R') {
-        resetGame();
+    /* 应用缓冲方向 */
+    dx = nextDx;
+    dy = nextDy;
+
+    /* 计算新头部 */
+    var head = snake[0];
+    var newHead = { x: head.x + dx, y: head.y + dy };
+
+    /* 撞墙检测 */
+    if (newHead.x < 0 || newHead.x >= COLS || newHead.y < 0 || newHead.y >= ROWS) {
+      die();
+      return;
+    }
+
+    /* 判断本帧是否吃到食物（在改蛇身之前） */
+    var eating = (newHead.x === food.x && newHead.y === food.y);
+
+    /*
+     * 撞自身检测：
+     * - 若本帧吃食物 → 尾部不弹出 → 需检查整条蛇（含尾部）
+     * - 若本帧不吃食物 → 尾部将弹出 → 须排除尾部段，否则蛇向尾部方向
+     *   移动时新头坐标与旧尾重合会被误判为撞自身
+     */
+    var limit = eating ? snake.length : snake.length - 1;
+    for (var i = 0; i < limit; i++) {
+      if (snake[i].x === newHead.x && snake[i].y === newHead.y) {
+        die();
+        return;
+      }
+    }
+
+    /* 插入新头部 */
+    snake.unshift(newHead);
+
+    /* 处理吃食物 / 弹出尾部 */
+    if (eating) {
+      score += 10;
+      spawnFood();
+      if (state === GAME_OVER) {
+        draw();
+        return;
+      }
+    } else {
+      snake.pop();
+    }
+
+    draw();
+  }
+
+  function die() {
+    state = GAME_OVER;
+    stopLoop();
+    draw();
+  }
+
+  /* ── 渲染 ── */
+  function draw() {
+    /* 清空 */
+    ctx.fillStyle = '#0f0f1a';
+    ctx.fillRect(0, 0, 400, 400);
+
+    /* 网格线 */
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 0.5;
+    var i;
+    for (i = 0; i <= COLS; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * GRID, 0);
+      ctx.lineTo(i * GRID, 400);
+      ctx.stroke();
+    }
+    for (i = 0; i <= ROWS; i++) {
+      ctx.beginPath();
+      ctx.moveTo(0, i * GRID);
+      ctx.lineTo(400, i * GRID);
+      ctx.stroke();
+    }
+
+    /* 食物 */
+    ctx.fillStyle = '#e74c3c';
+    drawRoundRect(food.x * GRID + 1, food.y * GRID + 1, GRID - 2, GRID - 2, 4);
+
+    /* 蛇身 */
+    for (i = 0; i < snake.length; i++) {
+      var seg = snake[i];
+      if (i === 0) {
+        ctx.fillStyle = '#2ecc71';
+      } else {
+        var alpha = (0.85 - (i / snake.length) * 0.25).toFixed(2);
+        ctx.fillStyle = 'rgba(46, 204, 113, ' + alpha + ')';
+      }
+      drawRoundRect(seg.x * GRID + 1, seg.y * GRID + 1, GRID - 2, GRID - 2, 4);
+    }
+
+    /* 分数 */
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 14px "Courier New", monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('SCORE: ' + score, 8, 8);
+
+    /* 暂停遮罩 */
+    if (state === PAUSED) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fillRect(0, 0, 400, 400);
+      ctx.fillStyle = '#f1c40f';
+      ctx.font = 'bold 32px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('PAUSED', 200, 190);
+      ctx.fillStyle = '#ccc';
+      ctx.font = '14px "Courier New", monospace';
+      ctx.fillText('\u6309\u7a7a\u683c\u952e\u7ee7\u7eed', 200, 228);
+    }
+
+    /* 游戏结束遮罩 */
+    if (state === GAME_OVER) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+      ctx.fillRect(0, 0, 400, 400);
+      ctx.fillStyle = '#e74c3c';
+      ctx.font = 'bold 32px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('GAME OVER', 200, 180);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 18px "Courier New", monospace';
+      ctx.fillText('\u5206\u6570: ' + score, 200, 215);
+      ctx.fillStyle = '#ccc';
+      ctx.font = '14px "Courier New", monospace';
+      ctx.fillText('\u6309\u7a7a\u683c\u952e\u91cd\u65b0\u5f00\u59cb', 200, 245);
+    }
+  }
+
+  /* 圆角矩形辅助 */
+  function drawRoundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  /* ── 键盘控制 ── */
+  document.addEventListener('keydown', function (e) {
+    var key = e.key;
+
+    /* 阻止方向键和空格默认行为 */
+    if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight' || key === ' ') {
+      e.preventDefault();
+    }
+
+    /* 游戏结束 → 空格重开 */
+    if (state === GAME_OVER) {
+      if (key === ' ') {
+        init();
       }
       return;
     }
 
-    if (e.key === 'p' || e.key === 'P') {
-      togglePause();
+    /* 暂停 / 恢复 */
+    if (key === ' ') {
+      if (state === PLAYING) {
+        state = PAUSED;
+        stopLoop();
+        draw();
+      } else if (state === PAUSED) {
+        state = PLAYING;
+        startLoop();
+        draw();
+      }
       return;
     }
 
-    if (paused) return;
-
-    switch (e.key) {
-      case 'ArrowLeft':  moveLeft();  break;
-      case 'ArrowRight': moveRight(); break;
-      case 'ArrowDown':  softDrop();  break;
-      case 'ArrowUp':    rotatePiece(); break;
-      case ' ':
-        e.preventDefault();
-        hardDrop();
-        break;
+    /* 方向控制（仅 PLAYING） */
+    if (state !== PLAYING) {
+      return;
     }
-    render();
+
+    switch (key) {
+      case 'ArrowUp':
+        if (dy !== 1) { nextDx = 0; nextDy = -1; }
+        break;
+      case 'ArrowDown':
+        if (dy !== -1) { nextDx = 0; nextDy = 1; }
+        break;
+      case 'ArrowLeft':
+        if (dx !== 1) { nextDx = -1; nextDy = 0; }
+        break;
+      case 'ArrowRight':
+        if (dx !== -1) { nextDx = 1; nextDy = 0; }
+        break;
+      default:
+        return;
+    }
   });
 
-  // ============ 暂停 ============
-  function togglePause() {
-    if (gameOver) return;
-    paused = !paused;
-    statusEl.textContent = paused ? '⏸ 暂停中' : '▶ 游戏中';
-    statusEl.style.color = paused ? '#ffd700' : '#eaeaea';
-    if (paused) {
-      stopDropLoop();
-    } else {
-      lastInterval = getDropInterval();
-      startDropLoop();
-    }
-    render();
-  }
-
-  // ============ 重置游戏 ============
-  function resetGame() {
-    stopLoop();
-    grid = createGrid();
-    score = 0;
-    totalLines = 0;
-    gameOver = false;
-    paused = false;
-    lastInterval = 0;
-    activePiece = null;
-    nextType = randomPiece();
-
-    scoreEl.textContent = '0';
-    linesEl.textContent = '0';
-    levelEl.textContent = '0';
-    statusEl.textContent = '▶ 游戏中';
-    statusEl.style.color = '#eaeaea';
-
-    spawnPiece();
-    lastInterval = getDropInterval();
-    startDropLoop();
-    startRenderLoop();
-    render();
-  }
-
-  // ============ 初始化 ============
-  function init() {
-    grid = createGrid();
-    nextType = randomPiece();
-    spawnPiece();
-    lastInterval = getDropInterval();
-    startDropLoop();
-    startRenderLoop();
-    renderNextPiece();
-    render();
-  }
-
+  /* ── 启动（渲染 + 立即开始主循环，满足 T03/T06 即开即玩） ── */
   init();
 })();
 </script>
