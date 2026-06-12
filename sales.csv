@@ -1,4 +1,4 @@
-id,product,amount
-1,widget,5
-2,gadget,4
-3,doohickey,6
+item,amount
+apple,3
+banana,5
+orange,7
