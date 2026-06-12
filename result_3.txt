@@ -1,1 +1,0 @@
-REVERSE_GAMMA_OK=ammag
