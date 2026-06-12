@@ -1,0 +1,5 @@
+sku,name,category,stock,min_stock,price
+A001,ESP32 DevKit,hardware,8,10,42.5
+A002,USB-C Cable,accessory,32,15,3.2
+A003,LiPo Battery,power,4,6,12.0
+A004,Sensor Pack,hardware,15,12,18.5
